@@ -1,0 +1,30 @@
+# Root .gitignore for JanSeva
+
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs and runtime errors
+*.log
+*.err
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment and secrets (defense in depth)
+.env
+.env*.local
+!.env.example
+
+# Supabase temporary files
+.temp/
+supabase/.temp/
+
+# Mobile / Android build outputs
+**/android/build/
+**/android/.gradle/
