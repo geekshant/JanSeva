@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: janmitra-postgis
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-janmitra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-janmitra}
+      POSTGRES_DB: ${POSTGRES_DB:-janmitra}
+    ports:
+      - "5433:5432"
+    volumes:
+      - janmitra_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-janmitra} -d ${POSTGRES_DB:-janmitra}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+    container_name: janmitra-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-janmitra}:${POSTGRES_PASSWORD:-janmitra}@db:5432/${POSTGRES_DB:-janmitra}
+      NODE_ENV: production
+      PORT: 8080
+      # No fallback: a weak/missing secret must fail the deploy, never silently
+      # sign tokens with a guessable key.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (>= 32 characters)}
+      AUTH_MODE: ${AUTH_MODE:-jwt}
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:-}
+    ports:
+      - "${API_PORT:-8080}:8080"
+
+volumes:
+  janmitra_pgdata:

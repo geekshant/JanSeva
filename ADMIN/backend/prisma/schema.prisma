@@ -1,0 +1,406 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  SYSTEM_ADMIN
+  DEPARTMENT_ADMIN
+  OFFICIAL
+  CITIZEN
+}
+
+enum ComplaintStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  VERIFIED
+  REOPENED
+  REJECTED
+  DUPLICATE
+}
+
+enum ComplaintPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum CommentVisibility {
+  PUBLIC
+  INTERNAL
+}
+
+enum VerificationResult {
+  VERIFIED
+  REJECTED
+}
+
+enum NotificationType {
+  COMPLAINT_SUBMITTED
+  COMPLAINT_ASSIGNED
+  STATUS_CHANGED
+  OFFICIAL_COMMENT
+  MARKED_RESOLVED
+  VERIFICATION_REQUESTED
+  REOPENED
+  REWARD_EARNED
+  BADGE_UNLOCKED
+  SLA_WARNING
+  VERIFIED
+  REJECTED
+  DUPLICATE
+}
+
+enum PointsTransactionType {
+  EARN
+  SPEND
+  PENALTY
+}
+
+// ---------------------------------------------------------------------------
+// Users & Sessions
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  email        String?   @unique
+  phone        String?
+  role         UserRole  @default(CITIZEN)
+  passwordHash String?
+  firebaseUid  String?   @unique
+  avatarUrl    String?
+  points       Int       @default(0)
+  contactInfo  Json?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id])
+
+  complaints         Complaint[]              @relation("ComplaintCreator")
+  assignedReports    Complaint[]              @relation("ComplaintOfficer")
+  comments           ComplaintComment[]
+  history            ComplaintStatusHistory[]
+  assignments        ComplaintAssignment[]    @relation("AssignmentOfficer")
+  assignedBy         ComplaintAssignment[]    @relation("AssignmentAssigner")
+  verifications      ComplaintVerification[]
+  notifications      Notification[]
+  deviceTokens       DeviceToken[]
+  pointsTransactions PointsTransaction[]
+  userBadges         UserBadge[]
+  auditLogs          AuditLog[]               @relation("AuditActor")
+  refreshSessions    RefreshSession[]
+
+  @@index([role])
+  @@index([departmentId])
+  @@index([points])
+  @@map("users")
+}
+
+model RefreshSession {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  digest    String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Departments
+// ---------------------------------------------------------------------------
+
+model Department {
+  id              String   @id @default(cuid())
+  name            String
+  code            String   @unique
+  description     String?
+  categoryMapping String[] @default([])
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  members     User[]
+  complaints  Complaint[]
+  assignments ComplaintAssignment[]
+  auditLogs   AuditLog[]            @relation("AuditDepartment")
+
+  @@index([isActive])
+  @@map("departments")
+}
+
+// ---------------------------------------------------------------------------
+// Complaints
+// ---------------------------------------------------------------------------
+
+model Complaint {
+  id                    String             @id @default(cuid())
+  trackingCode          String             @unique
+  title                 String
+  description           String
+  category              String
+  status                ComplaintStatus    @default(SUBMITTED)
+  priority              ComplaintPriority  @default(MEDIUM)
+  suggestedPriority     ComplaintPriority?
+latitude             Float
+  longitude            Float
+  // PostGIS geography point kept in sync by a DB trigger (see migration SQL).
+  location             Unsupported("geography(Point,4326)")?
+  address              String
+  ward                  String?
+  isAnonymous           Boolean            @default(false)
+  resolutionNote        String?
+  resolutionProofUrls   String[]           @default([])
+  rejectedReason        String?
+  duplicateOfId         String?
+  lastStatusChangedById String?
+  createdById           String
+  createdBy             User               @relation("ComplaintCreator", fields: [createdById], references: [id])
+  assignedDepartmentId  String?
+  assignedDepartment    Department?        @relation(fields: [assignedDepartmentId], references: [id])
+  assignedOfficerId     String?
+  assignedOfficer       User?              @relation("ComplaintOfficer", fields: [assignedOfficerId], references: [id])
+
+  images             ComplaintImage[]
+  comments           ComplaintComment[]
+  statusHistory      ComplaintStatusHistory[]
+  assignments        ComplaintAssignment[]
+  verifications      ComplaintVerification[]
+  notifications      Notification[]
+  pointsTransactions PointsTransaction[]
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  resolvedAt      DateTime?
+  verifiedAt      DateTime?
+  reopenedAt      DateTime?
+  statusChangedAt DateTime  @default(now())
+  slaDueAt        DateTime
+  deletedAt       DateTime?
+
+  @@index([trackingCode])
+  @@index([status])
+  @@index([category])
+  @@index([priority])
+  @@index([assignedDepartmentId])
+  @@index([assignedOfficerId])
+  @@index([createdById])
+  @@index([createdAt])
+  @@index([latitude, longitude])
+  @@map("complaints")
+}
+
+model ComplaintImage {
+  id          String    @id @default(cuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  url         String
+  publicId    String?
+  uploadedBy  String?
+  sortOrder   Int       @default(0)
+  uploadedAt  DateTime  @default(now())
+
+  @@index([complaintId])
+  @@map("complaint_images")
+}
+
+model ComplaintComment {
+  id          String            @id @default(cuid())
+  complaintId String
+  complaint   Complaint         @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  authorId    String
+  author      User              @relation(fields: [authorId], references: [id])
+  text        String
+  visibility  CommentVisibility @default(PUBLIC)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([complaintId])
+  @@index([authorId])
+  @@map("complaint_comments")
+}
+
+model ComplaintStatusHistory {
+  id          String    @id @default(cuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  fromStatus  String?
+  toStatus    String
+  changedById String?
+  changedBy   User?     @relation(fields: [changedById], references: [id])
+  note        String?
+  changedAt   DateTime  @default(now())
+
+  @@index([complaintId])
+  @@index([changedById])
+  @@map("complaint_status_history")
+}
+
+model ComplaintAssignment {
+  id           String     @id @default(cuid())
+  complaintId  String
+  complaint    Complaint  @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  departmentId String
+  department   Department @relation(fields: [departmentId], references: [id])
+  officerId    String?
+  officer      User?      @relation("AssignmentOfficer", fields: [officerId], references: [id])
+  assignedById String?
+  assignedBy   User?      @relation("AssignmentAssigner", fields: [userId], references: [id])
+  note         String?
+  assignedAt   DateTime   @default(now())
+  userId       String?
+
+  @@index([complaintId])
+  @@index([departmentId])
+  @@index([officerId])
+  @@map("complaint_assignments")
+}
+
+model ComplaintVerification {
+  id           String             @id @default(cuid())
+  complaintId  String
+  complaint    Complaint          @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  verifiedById String
+  verifiedBy   User               @relation(fields: [verifiedById], references: [id])
+  result       VerificationResult
+  notes        String?
+  proofUrls    String[]           @default([])
+  verifiedAt   DateTime           @default(now())
+
+  @@index([complaintId])
+  @@index([verifiedById])
+  @@map("complaint_verifications")
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String?
+  payload   Json?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  complaintId String?
+  complaint   Complaint? @relation(fields: [complaintId], references: [id], onDelete: SetNull)
+
+  @@index([userId, readAt])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+model DeviceToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String    @unique
+
+  /// optional platform hint (ios | android | web)
+  platform  String?
+  lastUsedAt DateTime @default(now())
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([lastUsedAt])
+  @@map("device_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Rewards & Gamification
+// ---------------------------------------------------------------------------
+
+model PointsTransaction {
+  id          String                @id @default(cuid())
+  userId      String
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  points      Int
+  type        PointsTransactionType @default(EARN)
+  reason      String
+  referenceId String?
+
+  complaintId String?
+  complaint   Complaint? @relation(fields: [complaintId], references: [id], onDelete: SetNull)
+  createdAt   DateTime   @default(now())
+
+  @@index([userId])
+  @@index([referenceId])
+  @@map("points_transactions")
+}
+
+model Badge {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  slug            String   @unique
+  description     String?
+  pointsThreshold Int
+  createdAt       DateTime @default(now())
+
+  userBadges UserBadge[]
+
+  @@map("badges")
+}
+
+model UserBadge {
+  id       String   @id @default(cuid())
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badgeId  String
+  badge    Badge    @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+  earnedAt DateTime @default(now())
+
+  @@unique([userId, badgeId])
+  @@index([badgeId])
+  @@map("user_badges")
+}
+
+// ---------------------------------------------------------------------------
+// Audit Log
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id           String      @id @default(cuid())
+  actorId      String?
+  actor        User?       @relation("AuditActor", fields: [actorId], references: [id])
+  action       String
+  entityType   String
+  entityId     String?
+  departmentId String?
+  department   Department? @relation("AuditDepartment", fields: [departmentId], references: [id])
+  before       Json?
+  after        Json?
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime    @default(now())
+
+  @@index([actorId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
